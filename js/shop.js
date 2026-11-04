@@ -1,0 +1,90 @@
+const api=async(u,o={})=>{const r=await fetch(u,{credentials:'same-origin',...o,headers:{'Content-Type':'application/json'},body:o.body&&JSON.stringify(o.body)});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||'Помилка сервера');return j};
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const STL={new:'Нове',paid:'Оплачено',shipped:'Відправлено',done:'Виконано',cancelled:'Скасовано'};
+let ME=null,CFG={};
+const V={n:v=>v.trim().length>1,ph:v=>/^(\+?38)?0\d{9}$/.test(v.replace(/[\s()-]/g,'')),em:v=>/^\S+@\S+\.\S+$/.test(v),ct:v=>v.trim().length>1,ad:v=>v.trim().length>3};
+const MSG={n:'Введіть повне ім’я',ph:'Вкажіть український номер, напр. +380501234567',em:'Введіть коректну адресу email',ct:'Введіть місто',ad:'Вкажіть номер відділення або адресу'};
+const co2=()=>{const f=$('#cf');if(!f)return;
+$('#dv').innerHTML=['Відділення «Нової пошти»','Кур’єр','Самовивіз'].map(x=>`<option>${x}</option>`).join('');
+$('#py').innerHTML=`<option value="cod">Оплата при отриманні</option>${CFG.liqpay?'<option value="card">Карткою онлайн (LiqPay)</option>':''}`;
+f.querySelector('.btn').insertAdjacentHTML('beforebegin','<div class="fld"><label for="pc">Промокод</label><input id="pc" autocomplete="off"></div>');
+f.querySelector('small')?.remove();if(ME){const l=ME.last||{};$('#n').value=ME.name;$('#em').value=ME.email;$('#ph').value=l.phone||'';$('#ct').value=l.city||'';$('#ad').value=l.address||''}
+f.onsubmit=async e=>{e.preventDefault();let bad=null;for(const k in V){const x=V[k]($('#'+k).value);$('#e-'+k).textContent=x?'':MSG[k];$('#'+k).classList.toggle('bad',!x);if(!x&&!bad)bad=k}
+if(bad)return $('#'+bad).focus();const b=f.querySelector('.btn');b.disabled=true;
+try{const r=await api('/api/orders',{method:'POST',body:{name:$('#n').value,phone:$('#ph').value,email:$('#em').value,city:$('#ct').value,address:$('#ad').value,delivery:$('#dv').value,payment:$('#py').value,promo:$('#pc').value,items:cart.map(c=>({id:c.id,q:c.q}))}});
+cart=[];sync();if(r.pay){const g=document.createElement('form');g.method='POST';g.action='https://www.liqpay.ua/api/3/checkout';g.innerHTML=`<input name="data" value="${r.pay.data}"><input name="signature" value="${r.pay.signature}">`;document.body.append(g);return g.submit()}
+draw(head('Дякуємо')+`<div class="wrap pg">${empty('Замовлення №'+r.id+' прийнято','До сплати: '+money(r.total)+'. '+(ME?'Статус замовлення видно в особистому кабінеті.':'Ми зв’яжемося з вами для підтвердження.'),ME?'<a class="btn d" href="account.html">Мої замовлення</a>':'<a class="btn d" href="index.html">На головну</a>')}</div>`)}
+catch(err){toast(err.message);b.disabled=false}}};
+const ordH=o=>`<div class="ord"><div class="oh"><strong>№${o.id}</strong><span class="st ${o.status}">${STL[o.status]}</span><span>${new Date(o.at).toLocaleDateString('uk-UA')}</span><b>${money(o.total)}</b></div>${o.items.map(i=>`<div>${esc(i.n)} × ${i.q}</div>`).join('')}</div>`;
+const account=async()=>{
+if(ME){let os=[];try{os=await api('/api/orders')}catch(e){}
+draw(head('Привіт, '+esc(ME.name))+`<div class="wrap pg auth wide"><button class="btn d" id="lo">Вийти</button><h2 class="sub">Мої замовлення</h2>${os.length?os.map(ordH).join(''):empty('Замовлень ще немає','Після першої покупки вони з’являться тут.')}</div>`);
+return $('#lo').onclick=async()=>{await api('/api/auth/logout',{method:'POST'});location.href='index.html'}}
+const form=reg=>{draw(head('Особистий кабінет')+`<div class="wrap pg auth"><div class="chs"><button class="chip ${reg?'':'on'}" data-mode="0">Вхід</button><button class="chip ${reg?'on':''}" data-mode="1">Реєстрація</button></div><form id="af" class="fl2">${reg?'<div class="fld"><label for="an">Ім’я</label><input id="an" autocomplete="name"></div>':''}<div class="fld"><label for="ae">${reg?'Email':'Email або логін'}</label><input id="ae" type="${reg?'email':'text'}" autocomplete="${reg?'email':'username'}"></div><div class="fld"><label for="ap">Пароль${reg?' (від 8 символів)':''}</label><input id="ap" type="password" autocomplete="${reg?'new':'current'}-password"></div><span class="er" id="ar"></span><button class="btn p">${reg?'Створити акаунт':'Увійти'}</button></form></div>`);
+$$('.chip[data-mode]').forEach(c=>c.onclick=()=>form(c.dataset.mode=='1'));
+$('#af').onsubmit=async e=>{e.preventDefault();try{await api('/api/auth/'+(reg?'register':'login'),{method:'POST',body:{name:reg?$('#an').value:'',email:$('#ae').value,password:$('#ap').value}});location.href=new URLSearchParams(location.search).get('next')||'account.html'}catch(x){$('#ar').textContent=x.message}}};form(false)};
+const admin=async()=>{if(!ME||!ME.admin)return draw(head('Керування')+`<div class="wrap pg">${empty('Немає доступу','Увійдіть як адміністратор.','<a class="btn d" href="account.html">Увійти</a>')}</div>`);
+const[os,ps]=await Promise.all([api('/api/admin/orders'),api('/api/admin/products')]);
+const rev=os.filter(o=>o.status!='cancelled').reduce((a,o)=>a+o.total,0);
+draw(head('Керування магазином')+`<div class="wrap pg"><div class="stats"><div><b>${os.length}</b>замовлень</div><div><b>${os.filter(o=>o.status=='new').length}</b>нових</div><div><b>${money(rev)}</b>виручка</div><div><b>${ps.length}</b>товарів</div></div><h2 class="sub0">Замовлення</h2><div class="tw"><table><tr><th>№</th><th>Клієнт</th><th>Склад</th><th>Сума</th><th>Оплата</th><th>Статус</th></tr>${os.map(o=>`<tr><td>${o.id}<br><small>${new Date(o.at).toLocaleDateString('uk-UA')}</small></td><td>${esc(o.name)}<br>${esc(o.phone)}<br>${esc(o.email)}<br>${esc(o.city)}, ${esc(o.address)}<br><small>${esc(o.delivery)}</small></td><td>${o.items.map(i=>esc(i.n)+' × '+i.q).join('<br>')}</td><td>${money(o.total)}</td><td>${o.pay=='card'?(o.paid?'Картка: сплачено':'Картка: очікує'):'При отриманні'}</td><td><select data-o="${o.id}">${Object.keys(STL).map(k=>`<option value="${k}" ${k==o.status?'selected':''}>${STL[k]}</option>`).join('')}</select></td></tr>`).join('')}</table></div>
+<h2 class="sub">Товари</h2><form id="np" class="np"><input id="pn" placeholder="Назва"><input id="pb" placeholder="Бренд"><select id="pc">${CATS.map(c=>`<option value="${c[0]}">${c[1]}</option>`).join('')}</select><input id="pk" placeholder="Фасування"><input id="pp" type="number" min="0" placeholder="Ціна, ₴"><input id="ps" type="number" min="0" placeholder="Залишок"><button class="btn d">Додати товар</button></form>
+<div class="tw"><table><tr><th>Фото</th><th>Назва</th><th>Ціна, ₴</th><th>Стара ціна</th><th>Залишок</th><th></th></tr>${ps.map(p=>`<tr><td><img class="th" src="${p.img}" alt=""><br><label class="up">Змінити фото<input type="file" accept="image/*" data-u="${p.id}" hidden></label></td><td><input class="wd" value="${esc(p.n)}" data-p="${p.id}" data-f="n"></td><td><input type="number" min="0" value="${p.p}" data-p="${p.id}" data-f="p"></td><td><input type="number" min="0" value="${p.o||''}" data-p="${p.id}" data-f="o"></td><td><input type="number" min="0" value="${p.s}" data-p="${p.id}" data-f="s"></td><td><button class="rm" data-d="${p.id}" aria-label="Видалити">${I.x}</button></td></tr>`).join('')}</table></div></div>`);
+const ok=m=>()=>toast(m),er=x=>toast(x.message);
+$$('[data-o]').forEach(s=>s.onchange=()=>api('/api/admin/orders/'+s.dataset.o,{method:'PATCH',body:{status:s.value}}).then(ok('Статус оновлено'),er));
+$$('[data-p]').forEach(i=>i.onchange=()=>api('/api/admin/products/'+i.dataset.p,{method:'PATCH',body:{[i.dataset.f]:i.value}}).then(ok('Збережено'),er));
+$$('[data-d]').forEach(b=>b.onclick=()=>confirm('Видалити товар?')&&api('/api/admin/products/'+b.dataset.d,{method:'DELETE'}).then(admin,er));
+$$('[data-u]').forEach(f=>f.onchange=()=>{const im=new Image();im.onload=()=>{const k=Math.min(1,1000/Math.max(im.width,im.height)),c=document.createElement('canvas');c.width=im.width*k;c.height=im.height*k;c.getContext('2d').drawImage(im,0,0,c.width,c.height);api('/api/admin/products/'+f.dataset.u+'/image',{method:'POST',body:{data:c.toDataURL('image/jpeg',.85)}}).then(admin,er)};im.src=URL.createObjectURL(f.files[0])});
+$('#np').onsubmit=e=>{e.preventDefault();api('/api/admin/products',{method:'POST',body:{n:$('#pn').value,b:$('#pb').value,c:$('#pc').value,k:$('#pk').value,p:$('#pp').value,s:$('#ps').value}}).then(admin,er)}};
+const reviews=async()=>{const id=new URLSearchParams(location.search).get('id'),box=document.createElement('section');$('.pg').append(box);
+const show=async()=>{let l=[];try{l=await api('/api/reviews?pid='+id)}catch(e){}const av=l.length?(l.reduce((a,x)=>a+x.rating,0)/l.length).toFixed(1):'';
+box.innerHTML=`<h2 class="sub">Відгуки${av?` <span class="stars">★ ${av}</span> <small>(${l.length})</small>`:''}</h2>${l.map(x=>`<div class="rvw"><span class="stars">${'★'.repeat(x.rating)}${'☆'.repeat(5-x.rating)}</span> <strong>${esc(x.name)}</strong> <small>${new Date(x.at).toLocaleDateString('uk-UA')}</small><p>${esc(x.text)}</p></div>`).join('')||'<p>Відгуків ще немає.</p>'}${ME?`<form id="rf" class="fl2"><div class="fld"><label for="rr">Оцінка</label><select id="rr">${[5,4,3,2,1].map(n=>`<option value="${n}">${'★'.repeat(n)}</option>`).join('')}</select></div><div class="fld"><label for="rt">Ваш відгук</label><textarea id="rt" rows="3"></textarea></div><button class="btn d">Надіслати відгук</button></form>`:'<p><a class="ln2" href="account.html">Увійдіть, щоб залишити відгук</a></p>'}`;
+const f=$('#rf');if(f)f.onsubmit=async e=>{e.preventDefault();try{await api('/api/reviews',{method:'POST',body:{pid:+id,rating:+$('#rr').value,text:$('#rt').value}});toast('Дякуємо за відгук!');show()}catch(x){toast(x.message)}}};show()};
+const contact=()=>{draw(head('Контакти')+`<div class="wrap pg"><div class="cl"><form id="cn" class="fl2"><div class="fld"><label for="c1">Ім’я</label><input id="c1" value="${ME?esc(ME.name):''}"></div><div class="fld"><label for="c2">Email</label><input id="c2" type="email"></div><div class="fld"><label for="c3">Повідомлення</label><textarea id="c3" rows="5"></textarea></div><button class="btn p">Надіслати</button></form><aside class="sum"><h3>UKRAGRO</h3><p><span>Телефон</span><b>+380 44 000 00 00</b></p><p><span>Графік</span><b>Пн–Пт, 8:00–18:00</b></p><small>Напишіть нам, і ми відповімо на вказаний email.</small></aside></div></div>`);
+$('#cn').onsubmit=async e=>{e.preventDefault();try{await api('/api/contact',{method:'POST',body:{name:$('#c1').value,email:$('#c2').value,text:$('#c3').value}});toast('Повідомлення надіслано');e.target.reset()}catch(x){toast(x.message)}}};
+const creators=()=>draw(head('Творці сайту')+`<div class="wrap pg"><div class="grid2">${[['Claude','https://claude.ai','Розробка сайту: дизайн, код і сервер.'],['Cursed',CFG.cursedUrl||'','Ідея та керування проєктом.']].map(c=>`<div class="ord"><h2 class="sub0">${c[0]}</h2><p>${c[2]}</p>${/^https?:\/\//.test(c[1])?`<a class="btn d" href="${esc(c[1])}" target="_blank" rel="noopener noreferrer">Відкрити</a>`:''}</div>`).join('')}</div></div>`);
+(async()=>{try{ME=(await api('/api/me')).user;CFG=await api('/api/config')}catch(e){}
+const a=$('#acc');a.setAttribute('href','account.html');a.onclick=null;a.setAttribute('aria-label',ME?'Кабінет: '+ME.name:'Увійти');
+$('.nav').insertAdjacentHTML('beforeend','<a href="contact.html">Контакти</a>');$('.fg>div:nth-child(3)').insertAdjacentHTML('beforeend','<a href="contact.html">Контакти</a>');if(ME&&ME.admin)$('.nav').insertAdjacentHTML('beforeend','<a href="admin.html">Керування</a>');
+$('#nl').onsubmit=async e=>{e.preventDefault();const m=$('#nm');try{await api('/api/subscribe',{method:'POST',body:{email:$('#nl input').value}});m.textContent='Дякуємо, ви підписані.';e.target.reset()}catch(x){m.textContent=x.message}};
+({account,admin,contact,creators,product:reviews,checkout:co2})[page]?.()})();
+/* ---- conversion layer: keeps visitors engaged and moves them toward checkout ---- */
+(()=>{
+const FD=5000,RM2=matchMedia('(prefers-reduced-motion:reduce)').matches,SKIP=['cart','checkout','account','admin','contact','creators'];
+const gs=(s,k)=>{try{return s.getItem(k)}catch(e){return null}},ss=(s,k,v)=>{try{s.setItem(k,v)}catch(e){}};
+const fdBar=s=>s?`<div class="fdb"><p>${s>=FD?'<b>Доставка безкоштовна</b>':`Додайте ще <b>${money(FD-s)}</b> до безкоштовної доставки`}</p><i><u style="width:${Math.min(100,s/FD*100)}%"></u></i></div>`:'';
+const TRUST='<ul class="trust"><li>Доставка по Україні, 1–4 дні</li><li>Оплата при отриманні або карткою</li><li>Консультація агронома: +380 44 000 00 00</li></ul>';
+const RV=()=>{try{return JSON.parse(gs(localStorage,'ua_rv'))||[]}catch(e){return[]}};
+const rvHtml=ex=>{const l=RV().filter(i=>i!=ex).map(pid).filter(Boolean).slice(0,4);return l.length?`<h2 class="sub">Ви нещодавно переглядали</h2><div class="grid">${l.map(card).join('')}</div>`:''};
+const ci=()=>`<div class="ci">${rows().map(x=>`<div><span class="art sm">${art(x)}</span><b>${esc(x.n)}</b><small>${x.q} × ${money(x.p)}</small></div>`).join('')}</div>`;
+if(page=='product'){const p=pid(new URLSearchParams(location.search).get('id')),a=$('.art.big');if(p&&a&&/\.svg(\?|$)/.test(p.img||''))a.classList.add('pre3d')}
+/* mini-cart after adding */
+const mini=()=>{let m=$('#mc');if(!m){m=document.createElement('aside');m.id='mc';m.setAttribute('aria-label','Кошик');document.body.append(m);m.onclick=e=>{if(e.target===m||e.target.closest('[data-mx]'))m.classList.remove('open')}}
+const r=rows(),[sub,dl]=totals();if(!r.length)return;
+m.innerHTML=`<div class="mp"><div class="mh"><strong>Товар додано до кошика</strong><button data-mx aria-label="Закрити">${I.x}</button></div>${fdBar(sub)}<div class="ml">${r.map(x=>`<div class="mi"><span class="art sm">${art(x)}</span><div><b>${esc(x.n)}</b><small>${x.q} × ${money(x.p)}</small></div></div>`).join('')}</div><div class="mf"><p><span>Разом</span><b>${money(sub+dl)}</b></p><a class="btn p full" href="checkout.html">Оформити замовлення ${I.arrow}</a><button class="btn o2 full" data-mx>Продовжити покупки</button></div></div>`;
+requestAnimationFrame(()=>m.classList.add('open'))};
+document.addEventListener('click',e=>{const b=e.target.closest&&e.target.closest('[data-a]');if(b&&!b.disabled&&!['cart','checkout'].includes(page))setTimeout(mini,RM2?0:800)});
+/* sticky add-to-cart on product page */
+const sticky=p=>{const b=$('.buy');if($('#sb2')||!b)return;const s=document.createElement('div');s.id='sb2';s.innerHTML=`<span><b>${esc(p.n)}</b><i>${money(p.p)}</i></span><button class="btn p" data-a="${p.id}" ${p.s?'':'disabled'}>До кошика</button>`;document.body.append(s);new IntersectionObserver(([e])=>s.classList.toggle('show',!e.isIntersecting&&e.boundingClientRect.top<0)).observe(b)};
+/* page-specific extras, re-applied whenever the page re-renders */
+const run=()=>{
+if(page=='cart'){const s=$('.sum');if(s&&!$('.fdb',s))s.insertAdjacentHTML('afterbegin',fdBar(totals()[0]))}
+if(page=='checkout'){const s=$('.sum');if(s&&!$('.ci',s)){s.querySelector('h3').insertAdjacentHTML('afterend',ci()+fdBar(totals()[0]));s.insertAdjacentHTML('beforeend',TRUST)}
+const pc=$('#pc');if(pc&&!pc.dataset.pf){pc.dataset.pf=1;const pm=gs(localStorage,'ua_promo');if(pm&&!pc.value)pc.value=pm}}
+if(page=='product'){const b=$('.buy'),p=pid(new URLSearchParams(location.search).get('id'));if(b&&p&&!$('.trust')){b.insertAdjacentHTML('afterend',TRUST);sticky(p);const h=rvHtml(p.id);if(h)$('.pg').insertAdjacentHTML('beforeend','<section id="rvw">'+h+'</section>');ss(localStorage,'ua_rv',JSON.stringify([p.id,...RV().filter(x=>x!=p.id)].slice(0,8)))}}
+if(page=='home'&&!$('#rvw')){const a=$('.sec.alt'),h=rvHtml(0);if(a&&h)a.insertAdjacentHTML('afterend','<section class="sec wrap" id="rvw">'+h+'</section>')}};
+new MutationObserver(run).observe(app,{childList:true,subtree:true});run();
+/* floating cart pill */
+const pill=()=>{let p=$('#pill');const n=cart.reduce((a,c)=>a+c.q,0);if(SKIP.includes(page)||!n){if(p)p.remove();return}if(!p){p=document.createElement('a');p.id='pill';p.href='cart.html';document.body.append(p)}p.innerHTML=`${I.bag}<span>${n} · ${money(totals()[0])}</span><b>Оформити ${I.arrow}</b>`};
+if($('#cc'))new MutationObserver(pill).observe($('#cc'),{childList:true,characterData:true,subtree:true});pill();
+/* welcome offer: once per session, on exit intent or after a while */
+const offer=()=>{if(SKIP.includes(page)||gs(localStorage,'ua_promo')||gs(sessionStorage,'ua_off')||$('#of'))return;ss(sessionStorage,'ua_off',1);
+const o=document.createElement('div');o.id='of';o.setAttribute('role','dialog');o.setAttribute('aria-modal','true');o.setAttribute('aria-label','Знижка');
+o.innerHTML=`<div class="op"><button class="ox" aria-label="Закрити">${I.x}</button><small>Вітаємо в UKRAGRO</small><h3>−10% на ваше замовлення</h3><p>Скористайтеся промокодом <b>AGRO10</b>. Ми застосуємо його автоматично при оформленні.</p><button class="btn p full" id="og">Отримати знижку ${I.arrow}</button><button class="no">Ні, дякую</button></div>`;
+document.body.append(o);requestAnimationFrame(()=>o.classList.add('open'));const x=()=>{o.classList.remove('open');setTimeout(()=>o.remove(),400)};
+o.onclick=e=>{if(e.target.closest('#og')){ss(localStorage,'ua_promo','AGRO10');toast('Промокод AGRO10 збережено');x()}else if(e.target===o||e.target.closest('.ox,.no'))x()}};
+const t0=Date.now();document.documentElement.addEventListener('mouseleave',e=>{if(e.clientY<=0&&Date.now()-t0>6000)offer()});setTimeout(offer,25000);
+document.addEventListener('keydown',e=>{if(e.key=='Escape'){const m=$('#mc');if(m)m.classList.remove('open');const c=$('#of .ox');if(c)c.click()}});
+/* rotating announcement + tab-title reminder */
+const bar=$('.bar span');if(bar&&!RM2){const m=[bar.textContent,'Промокод AGRO10: −10% на замовлення','Консультація агронома: +380 44 000 00 00'];let i=0;setInterval(()=>{bar.classList.add('fo');setTimeout(()=>{i=(i+1)%m.length;bar.textContent=m[i];bar.classList.remove('fo')},300)},5000)}
+const T0=document.title;document.addEventListener('visibilitychange',()=>{document.title=document.hidden&&cart.length&&page!='checkout'?'У кошику на вас чекають товари | UKRAGRO':T0});
+})();
